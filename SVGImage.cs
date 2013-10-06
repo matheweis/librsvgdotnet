@@ -3,14 +3,16 @@
     using System;
     using System.Drawing;
     using System.Drawing.Imaging;
+    using System.Runtime.ExceptionServices;
     using System.Runtime.InteropServices;
+    using System.Security;
 
     /// <summary>
     /// The SVGImage class allows a C# Bitmap to be rendered from a string containing SVG data
     /// </summary>
     public class SVGImage : IDisposable
     {
-        private readonly IntPtr _rsvgHandle;
+        private IntPtr _rsvgHandle = IntPtr.Zero;
         private static bool _initialized = false;
         
         /// <summary>
@@ -22,23 +24,11 @@
             if (!_initialized)
             {
                 g_type_init();
+                rsvg_init();
                 _initialized = true;
             }
 
-            IntPtr temp;
-            IntPtr handle = rsvg_handle_new_from_data(data, data.Length, out temp);
-
-            if (handle == IntPtr.Zero)
-            {
-                if (temp != IntPtr.Zero)
-                {
-                    GError error = (GError)Marshal.PtrToStructure(temp, typeof(GError));
-                    throw new Exception(error.message);
-                }
-                throw new Exception();
-            }
-
-            _rsvgHandle = handle;
+            ReadFile(data);
         }
 
         /// <summary>
@@ -54,6 +44,11 @@
 
             int dw = 0;
             int dh = 0;
+
+            if (_rsvgHandle == IntPtr.Zero)
+            {
+                return null;
+            }
 
             rsvg_handle_get_dimensions(_rsvgHandle, ref dim);
 
@@ -124,12 +119,47 @@
             return bitmap;
         }
 
+        [HandleProcessCorruptedStateExceptions]
+        [SecurityCritical]
+        public void ReadFile(string data)
+        {
+            IntPtr error = IntPtr.Zero;
+            IntPtr handle = IntPtr.Zero;
+
+            try
+            {
+                handle = rsvg_handle_new_from_data(data, data.Length - 1, out error);
+            }
+            catch (Exception e)
+            {
+                throw e;
+            }
+
+            if (handle == IntPtr.Zero)
+            {
+                if (error != IntPtr.Zero)
+                {
+                    GError errorstruct = (GError)Marshal.PtrToStructure(error, typeof(GError));
+                    throw new Exception(errorstruct.message);
+                }
+                throw new Exception();
+            }
+            else
+            {
+                _rsvgHandle = handle;
+            }
+        }
+
         /// <summary>
         /// Free the memory associated with the SVGImage
         /// </summary>
         public void Dispose()
         {
-            rsvg_handle_free(_rsvgHandle);
+            if (_rsvgHandle != IntPtr.Zero)
+            {
+                rsvg_handle_free(_rsvgHandle);
+            }
+            _rsvgHandle = IntPtr.Zero;
         }
 
         #region P/Invoke
@@ -153,11 +183,13 @@
             public string message;
         }
 
+        [DllImport("librsvg-2-2.dll", CallingConvention = CallingConvention.Cdecl)]
+        static extern void rsvg_init();
         [DllImport("librsvg-2-2.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-        static extern IntPtr rsvg_handle_new_from_data(string data, int data_len, out IntPtr error);
+        static extern IntPtr rsvg_handle_new_from_data([MarshalAs(UnmanagedType.LPStr)]string data, int data_len, out IntPtr error);
         [DllImport("librsvg-2-2.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-        static extern IntPtr rsvg_handle_new_from_file(string file_name, out IntPtr error);
-        [DllImport("librsvg-2-2.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        static extern IntPtr rsvg_handle_new_from_file([MarshalAs(UnmanagedType.LPStr)]string file_name, out IntPtr error);
+        [DllImport("librsvg-2-2.dll", CallingConvention = CallingConvention.Cdecl)]
         static extern void rsvg_handle_free(IntPtr handle);
         [DllImport("librsvg-2-2.dll", CallingConvention = CallingConvention.Cdecl)]
         static extern bool rsvg_handle_render_cairo(IntPtr handle, IntPtr cairo);
